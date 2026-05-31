@@ -38,10 +38,7 @@ type GameState = {
 };
 
 export default function Home() {
-  const [questionsMap, setQuestionsMap] = useState<Record<string, Question>>(
-    {}
-  );
-
+  const [questionsMap, setQuestionsMap] = useState<Record<string, Question>>({});
   const [players, setPlayers] = useState<Player[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
 
@@ -52,7 +49,6 @@ export default function Home() {
 
   const [selectedAnswer, setSelectedAnswer] = useState("");
   const [answerSent, setAnswerSent] = useState(false);
-
   const [nowMs, setNowMs] = useState(Date.now());
 
   const currentQuestionId =
@@ -64,11 +60,8 @@ export default function Home() {
 
   const countdownToGame = useMemo(() => {
     if (!gameState?.game_start) return null;
-
     const target = new Date(gameState.game_start).getTime();
-
     if (Number.isNaN(target)) return null;
-
     return Math.max(0, Math.ceil((target - nowMs) / 1000));
   }, [gameState?.game_start, nowMs]);
 
@@ -77,7 +70,6 @@ export default function Home() {
 
     if (savedPlayer) {
       const player = JSON.parse(savedPlayer);
-
       setPlayerName(player.name || "");
       setPhone(player.phone || "");
       setEmail(player.email || "");
@@ -96,11 +88,7 @@ export default function Home() {
       .channel("players-live")
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "players",
-        },
+        { event: "*", schema: "public", table: "players" },
         () => loadPlayers()
       )
       .subscribe();
@@ -109,11 +97,7 @@ export default function Home() {
       .channel("game-state-live")
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "game_state",
-        },
+        { event: "*", schema: "public", table: "game_state" },
         () => {
           loadGameState();
           loadPlayers();
@@ -123,7 +107,6 @@ export default function Home() {
 
     return () => {
       clearInterval(clock);
-
       supabase.removeChannel(playersChannel);
       supabase.removeChannel(gameChannel);
     };
@@ -139,9 +122,7 @@ export default function Home() {
   ]);
 
   async function loadQuestions() {
-    const { data } = await supabase
-      .from("public_questions")
-      .select("*");
+    const { data } = await supabase.from("public_questions").select("*");
 
     if (data) {
       const map: Record<string, Question> = {};
@@ -178,9 +159,7 @@ export default function Home() {
   }
 
   async function checkExistingAnswer() {
-    if (!phone || !currentQuestion || !gameState?.updated_at) {
-      return;
-    }
+    if (!phone || !currentQuestion || !gameState?.updated_at) return;
 
     const { data } = await supabase
       .from("answers")
@@ -200,37 +179,57 @@ export default function Home() {
   }
 
   async function joinGame() {
-    if (!playerName.trim() || !phone.trim() || !email.trim()) {
-      alert("Completeaza toate campurile.");
+    const phoneClean = phone.replace(/\s+/g, "");
+    const emailClean = email.trim().toLowerCase();
+    const nameClean = playerName.trim();
+
+    const phoneRegex = /^07[0-9]{8}$/;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+    if (!nameClean) {
+      alert("Completeaza numele complet.");
+      return;
+    }
+
+    if (!phoneRegex.test(phoneClean)) {
+      alert("Telefon invalid. Introdu un numar valid, de forma 07XXXXXXXX.");
+      return;
+    }
+
+    if (!emailRegex.test(emailClean)) {
+      alert("Email invalid. Introdu o adresa de email valida.");
       return;
     }
 
     localStorage.setItem(
       "concurs_player",
       JSON.stringify({
-        name: playerName,
-        phone,
-        email,
+        name: nameClean,
+        phone: phoneClean,
+        email: emailClean,
       })
     );
 
     const { data: existingPlayers } = await supabase
       .from("players")
       .select("*")
-      .eq("phone", phone)
+      .eq("phone", phoneClean)
       .limit(1);
 
     if (!existingPlayers || existingPlayers.length === 0) {
       await supabase.from("players").insert([
         {
-          name: playerName,
-          phone,
-          email,
+          name: nameClean,
+          phone: phoneClean,
+          email: emailClean,
           score: 0,
         },
       ]);
     }
 
+    setPlayerName(nameClean);
+    setPhone(phoneClean);
+    setEmail(emailClean);
     setJoined(true);
 
     loadPlayers();
@@ -302,7 +301,7 @@ export default function Home() {
 
             <input
               className="bg-white text-black p-4 rounded-xl text-lg"
-              placeholder="Telefon"
+              placeholder="Telefon, ex: 07XXXXXXXX"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
             />
@@ -342,9 +341,7 @@ export default function Home() {
             {gameState.winner_name} a castigat concursul si premiul de 100 LEI!
           </h1>
 
-          <p className="text-2xl mt-6">
-            Urmatorul joc va incepe in curand.
-          </p>
+          <p className="text-2xl mt-6">Urmatorul joc va incepe in curand.</p>
         </div>
       </main>
     );
@@ -364,9 +361,7 @@ export default function Home() {
             Lobby concurs
           </h1>
 
-          <p className="text-2xl mb-6">
-            Concursul incepe in:
-          </p>
+          <p className="text-2xl mb-6">Concursul incepe in:</p>
 
           <div className="bg-[#020617] rounded-3xl p-8 mb-6">
             <p className="text-7xl font-bold text-green-400">
@@ -390,9 +385,7 @@ export default function Home() {
             Esti inscris in joc, {playerName}!
           </h1>
 
-          <p className="text-2xl">
-            Jocul nu este programat inca.
-          </p>
+          <p className="text-2xl">Jocul nu este programat inca.</p>
         </div>
       </main>
     );
@@ -422,7 +415,6 @@ export default function Home() {
 
             <div className="text-center">
               <p className="text-gray-300 text-sm">Intrebarea</p>
-
               <p className="text-3xl font-bold">
                 {(gameState.current_question_index || 0) + 1}
               </p>
@@ -430,7 +422,6 @@ export default function Home() {
 
             <div className="text-right">
               <p className="text-gray-300 text-sm">Timp ramas</p>
-
               <p className="text-3xl font-bold text-red-400">
                 {gameState.time_left}s
               </p>
