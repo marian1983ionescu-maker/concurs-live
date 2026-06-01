@@ -8,7 +8,10 @@ const RESULT_SECONDS = 3;
 const WIN_SCORE = 10;
 
 function clean(value: unknown) {
-  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 }
 
 function cleanPhone(value: unknown) {
@@ -21,17 +24,32 @@ async function findPlayer(winner: any) {
   const name = String(winner.player_name || "").trim();
 
   if (phone) {
-    const { data } = await supabase.from("players").select("*").eq("phone", phone).limit(1);
+    const { data } = await supabase
+      .from("players")
+      .select("*")
+      .eq("phone", phone)
+      .limit(1);
+
     if (data && data.length > 0) return data[0];
   }
 
   if (email) {
-    const { data } = await supabase.from("players").select("*").eq("email", email).limit(1);
+    const { data } = await supabase
+      .from("players")
+      .select("*")
+      .eq("email", email)
+      .limit(1);
+
     if (data && data.length > 0) return data[0];
   }
 
   if (name) {
-    const { data } = await supabase.from("players").select("*").eq("name", name).limit(1);
+    const { data } = await supabase
+      .from("players")
+      .select("*")
+      .eq("name", name)
+      .limit(1);
+
     if (data && data.length > 0) return data[0];
   }
 
@@ -64,14 +82,41 @@ async function finishGame(player: any) {
 
 export async function GET() {
   try {
-    const { data: gameState } = await supabase
+    const { data: lockOk, error: lockError } = await supabase.rpc(
+      "acquire_game_loop_lock"
+    );
+
+    if (lockError) {
+      console.log("LOCK ERROR:", lockError);
+
+      return NextResponse.json({
+        success: false,
+        step: "lock_error",
+        error: lockError,
+      });
+    }
+
+    if (!lockOk) {
+      return NextResponse.json({
+        success: true,
+        locked: true,
+      });
+    }
+
+    const { data: gameState, error: gameStateError } = await supabase
       .from("game_state")
       .select("*")
       .eq("id", 1)
       .single();
 
-    if (!gameState) {
-      return NextResponse.json({ success: true });
+    if (gameStateError || !gameState) {
+      console.log("GAME STATE ERROR:", gameStateError);
+
+      return NextResponse.json({
+        success: false,
+        step: "game_state",
+        error: gameStateError,
+      });
     }
 
     if (!gameState.is_running && gameState.game_start) {
@@ -109,6 +154,7 @@ export async function GET() {
 
     if (winnerAlready && winnerAlready.length > 0) {
       await finishGame(winnerAlready[0]);
+
       return NextResponse.json({ success: true });
     }
 
@@ -117,7 +163,10 @@ export async function GET() {
     const currentQuestionId = questionOrder[currentIndex];
 
     if (!currentQuestionId) {
-      return NextResponse.json({ success: false });
+      return NextResponse.json({
+        success: false,
+        step: "missing_question_id",
+      });
     }
 
     if (!gameState.show_result && gameState.time_left > 0) {
@@ -139,7 +188,10 @@ export async function GET() {
         .single();
 
       if (!publicQuestion) {
-        return NextResponse.json({ success: false });
+        return NextResponse.json({
+          success: false,
+          step: "public_question_missing",
+        });
       }
 
       const { data: privateQuestion } = await supabase
@@ -149,7 +201,10 @@ export async function GET() {
         .single();
 
       if (!privateQuestion) {
-        return NextResponse.json({ success: false });
+        return NextResponse.json({
+          success: false,
+          step: "private_question_missing",
+        });
       }
 
       const correctAnswer = privateQuestion.correct_answer;
@@ -207,6 +262,7 @@ export async function GET() {
           time_left: RESULT_SECONDS,
           last_winner_name: winnerName,
           last_correct_answer: correctAnswer,
+          updated_at: new Date().toISOString(),
         })
         .eq("id", 1);
 
@@ -255,7 +311,15 @@ export async function GET() {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.log("EROARE GAME LOOP:", error);
-    return NextResponse.json({ success: false }, { status: 500 });
+
+    return NextResponse.json(
+      {
+        success: false,
+        step: "catch",
+        error: String(error),
+      },
+      { status: 500 }
+    );
   }
 }
 

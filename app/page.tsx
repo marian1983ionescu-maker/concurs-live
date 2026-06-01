@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { supabase } from "./supabase";
 
@@ -52,10 +52,20 @@ export default function Home() {
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [joined, setJoined] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(false);
 
   const [selectedAnswer, setSelectedAnswer] = useState("");
   const [answerSent, setAnswerSent] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
+
+  const tickSoundRef = useRef<HTMLAudioElement | null>(null);
+  const correctSoundRef = useRef<HTMLAudioElement | null>(null);
+  const winnerSoundRef = useRef<HTMLAudioElement | null>(null);
+  const timeoutSoundRef = useRef<HTMLAudioElement | null>(null);
+
+  const lastTickSecondRef = useRef<number | null>(null);
+  const lastResultKeyRef = useRef<string | null>(null);
+  const lastWinnerSoundRef = useRef<string | null>(null);
 
   const currentQuestionId =
     gameState?.question_order?.[gameState.current_question_index || 0];
@@ -75,6 +85,11 @@ export default function Home() {
   }, [gameState?.game_start, nowMs]);
 
   useEffect(() => {
+    tickSoundRef.current = new Audio("/sounds/tick.mp3");
+    correctSoundRef.current = new Audio("/sounds/correct.mp3");
+    winnerSoundRef.current = new Audio("/sounds/winner.mp3");
+    timeoutSoundRef.current = new Audio("/sounds/timeout.mp3");
+
     restoreSavedPlayer();
 
     loadQuestions();
@@ -113,7 +128,21 @@ export default function Home() {
     };
   }, []);
 
-    useEffect(() => {
+  useEffect(() => {
+    if (!gameState?.is_running) return;
+
+    const gameLoop = setInterval(async () => {
+      try {
+        await fetch("/api/game-loop");
+      } catch (error) {
+        console.log("EROARE GAME LOOP:", error);
+      }
+    }, 1000);
+
+    return () => clearInterval(gameLoop);
+  }, [gameState?.is_running]);
+
+  useEffect(() => {
     if (!gameState?.reset_key) return;
 
     const savedResetKey = localStorage.getItem("concurs_reset_key");
@@ -143,6 +172,110 @@ export default function Home() {
     currentQuestionId,
     currentQuestion?.id,
   ]);
+
+  useEffect(() => {
+    if (!gameState?.is_running || gameState.show_result) return;
+
+    if (gameState.time_left <= 3 && gameState.time_left > 0) {
+      if (lastTickSecondRef.current !== gameState.time_left) {
+        lastTickSecondRef.current = gameState.time_left;
+        playSound(tickSoundRef);
+      }
+    }
+
+    if (gameState.time_left > 3) {
+      lastTickSecondRef.current = null;
+    }
+  }, [gameState?.time_left, gameState?.is_running, gameState?.show_result]);
+
+  useEffect(() => {
+    if (!gameState?.show_result) return;
+
+    const resultKey = `${gameState.current_question_index}-${gameState.last_correct_answer}-${gameState.last_winner_name}`;
+
+    if (lastResultKeyRef.current === resultKey) return;
+
+    lastResultKeyRef.current = resultKey;
+
+    if (gameState.last_winner_name && gameState.last_winner_name !== "Nimeni") {
+      playSound(correctSoundRef);
+    } else {
+      playSound(timeoutSoundRef);
+    }
+  }, [
+    gameState?.show_result,
+    gameState?.current_question_index,
+    gameState?.last_correct_answer,
+    gameState?.last_winner_name,
+  ]);
+
+  useEffect(() => {
+    if (!gameState?.winner_name) return;
+
+    if (lastWinnerSoundRef.current === gameState.winner_name) return;
+
+    lastWinnerSoundRef.current = gameState.winner_name;
+    playSound(winnerSoundRef);
+  }, [gameState?.winner_name]);
+
+  function playSound(soundRef: { current: HTMLAudioElement | null }) {
+    if (!soundEnabled) return;
+
+    const sound = soundRef.current;
+
+    if (!sound) return;
+
+    sound.currentTime = 0;
+    sound.volume = 1;
+    sound.play().catch(() => {});
+  }
+
+  function unlockSounds() {
+    const sounds = [
+      tickSoundRef.current,
+      correctSoundRef.current,
+      winnerSoundRef.current,
+      timeoutSoundRef.current,
+    ];
+
+    sounds.forEach((sound) => {
+      if (!sound) return;
+
+      sound.volume = 0.01;
+      sound.currentTime = 0;
+
+      sound
+        .play()
+        .then(() => {
+          sound.pause();
+          sound.currentTime = 0;
+          sound.volume = 1;
+        })
+        .catch(() => {
+          sound.volume = 1;
+        });
+    });
+  }
+
+  async function enableSound() {
+    unlockSounds();
+    setSoundEnabled(true);
+  }
+
+  function SoundButton() {
+    return !soundEnabled ? (
+      <button
+        onClick={enableSound}
+        className="mb-4 bg-green-500 hover:bg-green-400 text-black font-black px-6 py-3 rounded-2xl shadow-lg"
+      >
+        ACTIVEAZA SUNET
+      </button>
+    ) : (
+      <div className="mb-4 bg-green-500 text-black font-black px-6 py-3 rounded-2xl">
+        SUNET ACTIV
+      </div>
+    );
+  }
 
   function getNextSundayAt20() {
     const now = new Date();
@@ -336,6 +469,8 @@ export default function Home() {
   }
 
   async function joinGame() {
+    unlockSounds();
+
     const phoneClean = phone.replace(/\s+/g, "");
     const emailClean = email.trim().toLowerCase();
     const nameClean = playerName.trim();
@@ -487,6 +622,8 @@ export default function Home() {
           </p>
 
           <div className="mt-6 flex flex-col gap-3">
+            <SoundButton />
+
             <input className="bg-[#1b2952] border border-blue-400/20 text-white p-3 rounded-2xl text-base outline-none focus:border-blue-400" placeholder="Nume complet" value={playerName} onChange={(e) => setPlayerName(e.target.value)} />
             <input className="bg-[#1b2952] border border-blue-400/20 text-white p-3 rounded-2xl text-base outline-none focus:border-blue-400" placeholder="Telefon" value={phone} onChange={(e) => setPhone(e.target.value)} />
             <input className="bg-[#1b2952] border border-blue-400/20 text-white p-3 rounded-2xl text-base outline-none focus:border-blue-400" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -523,6 +660,8 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] flex items-center justify-center p-4 text-white">
         <div className="bg-[#101b3b]/90 border border-green-400/30 shadow-[0_0_100px_rgba(34,197,94,0.35)] rounded-[35px] p-8 text-center max-w-2xl">
+          <SoundButton />
+
           <div className="flex justify-center mb-5">
             <Image src="/logo.jpg" alt="logo" width={130} height={130} className="rounded-2xl" />
           </div>
@@ -575,6 +714,8 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] flex items-center justify-center p-4 text-white">
         <div className="bg-[#101b3b]/90 border border-blue-400/20 shadow-[0_0_80px_rgba(37,99,235,0.25)] rounded-[35px] p-8 text-center max-w-2xl">
+          <SoundButton />
+
           <div className="flex justify-center mb-5">
             <Image src="/logo.jpg" alt="logo" width={130} height={130} className="rounded-2xl" />
           </div>
@@ -609,6 +750,8 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] flex items-center justify-center p-4 text-white">
         <div className="bg-[#101b3b]/90 border border-blue-400/20 shadow-[0_0_80px_rgba(37,99,235,0.25)] rounded-[35px] p-8 text-center max-w-2xl">
+          <SoundButton />
+
           <div className="flex justify-center mb-5">
             <Image src="/logo.jpg" alt="logo" width={130} height={130} className="rounded-2xl" />
           </div>
@@ -639,6 +782,8 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] text-white px-4 py-2 flex flex-col items-center overflow-hidden">
       <div className="flex flex-col items-center">
+        <SoundButton />
+
         <Image src="/logo.jpg" alt="logo" width={78} height={78} className="rounded-xl shadow-[0_0_35px_rgba(37,99,235,0.35)]" />
 
         <h1 className="text-3xl md:text-4xl font-black text-center mt-2">
