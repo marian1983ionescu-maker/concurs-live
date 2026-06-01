@@ -21,6 +21,8 @@ type Player = {
   phone: string;
   email: string;
   score: number;
+  session_id: string | null;
+  is_active: boolean;
 };
 
 type GameState = {
@@ -36,6 +38,9 @@ type GameState = {
   lobby_start: string | null;
   game_start: string | null;
   question_order: string[];
+  reset_key: string | null;
+  finished_at: string | null;
+  final_winner_score: number | null;
 };
 
 export default function Home() {
@@ -70,16 +75,7 @@ export default function Home() {
   }, [gameState?.game_start, nowMs]);
 
   useEffect(() => {
-    const savedPlayer = localStorage.getItem("concurs_player");
-
-    if (savedPlayer) {
-      const player = JSON.parse(savedPlayer);
-
-      setPlayerName(player.name || "");
-      setPhone(player.phone || "");
-      setEmail(player.email || "");
-      setJoined(true);
-    }
+    restoreSavedPlayer();
 
     loadQuestions();
     loadPlayers();
@@ -112,11 +108,31 @@ export default function Home() {
 
     return () => {
       clearInterval(clock);
-
       supabase.removeChannel(playersChannel);
       supabase.removeChannel(gameChannel);
     };
   }, []);
+
+    useEffect(() => {
+    if (!gameState?.reset_key) return;
+
+    const savedResetKey = localStorage.getItem("concurs_reset_key");
+
+    if (savedResetKey && savedResetKey !== gameState.reset_key) {
+      logoutLocalPlayer(gameState.reset_key);
+      return;
+    }
+
+    if (!savedResetKey) {
+      localStorage.setItem("concurs_reset_key", gameState.reset_key);
+    }
+  }, [gameState?.reset_key]);
+
+  useEffect(() => {
+    if (currentQuestionId && !questionsMap[currentQuestionId]) {
+      loadSingleQuestion(currentQuestionId);
+    }
+  }, [currentQuestionId, questionsMap]);
 
   useEffect(() => {
     checkExistingAnswer();
@@ -125,19 +141,152 @@ export default function Home() {
     gameState?.updated_at,
     phone,
     currentQuestionId,
+    currentQuestion?.id,
   ]);
+
+  function getNextSundayAt20() {
+    const now = new Date();
+    const nextSunday = new Date(now);
+    const day = now.getDay();
+    const daysUntilSunday = day === 0 ? 7 : 7 - day;
+
+    nextSunday.setDate(now.getDate() + daysUntilSunday);
+    nextSunday.setHours(20, 0, 0, 0);
+
+    return nextSunday;
+  }
+
+  function formatDateRo(date: Date) {
+    return `${String(date.getDate()).padStart(2, "0")}-${String(
+      date.getMonth() + 1
+    ).padStart(2, "0")}-${date.getFullYear()}`;
+  }
+
+  function formatCountdown(totalSeconds: number) {
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (days > 0) {
+      return `${days} zile ${hours} ore ${minutes} minute ${seconds} secunde`;
+    }
+
+    if (hours > 0) {
+      return `${hours} ore ${minutes} minute ${seconds} secunde`;
+    }
+
+    return `${minutes} minute ${seconds} secunde`;
+  }
+
+  function getOrCreateSessionId() {
+    let sessionId = localStorage.getItem("concurs_session_id");
+
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      localStorage.setItem("concurs_session_id", sessionId);
+    }
+
+    return sessionId;
+  }
+
+  function logoutLocalPlayer(newResetKey?: string) {
+    localStorage.removeItem("concurs_player");
+    localStorage.removeItem("concurs_session_id");
+
+    if (newResetKey) {
+      localStorage.setItem("concurs_reset_key", newResetKey);
+    }
+
+    setPlayerName("");
+    setPhone("");
+    setEmail("");
+    setJoined(false);
+    setSelectedAnswer("");
+    setAnswerSent(false);
+  }
+
+  function restoreSavedPlayer() {
+    const savedPlayer = localStorage.getItem("concurs_player");
+
+    if (!savedPlayer) return;
+
+    try {
+      const player = JSON.parse(savedPlayer);
+
+      const savedName = String(player.name || "").trim();
+      const savedPhone = String(player.phone || "").replace(/\s+/g, "");
+      const savedEmail = String(player.email || "").trim().toLowerCase();
+
+      const phoneRegex = /^07[0-9]{8}$/;
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+      if (!savedName || !phoneRegex.test(savedPhone) || !emailRegex.test(savedEmail)) {
+        logoutLocalPlayer();
+        return;
+      }
+
+      setPlayerName(savedName);
+      setPhone(savedPhone);
+      setEmail(savedEmail);
+      setJoined(true);
+    } catch {
+      logoutLocalPlayer();
+    }
+  }
+
+  function getSavedPlayerData() {
+    const savedPlayer = localStorage.getItem("concurs_player");
+
+    if (!savedPlayer) {
+      return {
+        name: playerName.trim(),
+        phone: phone.replace(/\s+/g, ""),
+        email: email.trim().toLowerCase(),
+      };
+    }
+
+    try {
+      const player = JSON.parse(savedPlayer);
+
+      return {
+        name: String(player.name || playerName || "").trim(),
+        phone: String(player.phone || phone || "").replace(/\s+/g, ""),
+        email: String(player.email || email || "").trim().toLowerCase(),
+      };
+    } catch {
+      return {
+        name: playerName.trim(),
+        phone: phone.replace(/\s+/g, ""),
+        email: email.trim().toLowerCase(),
+      };
+    }
+  }
 
   async function loadQuestions() {
     const { data } = await supabase.from("public_questions").select("*");
 
     if (data) {
       const map: Record<string, Question> = {};
-
       data.forEach((question) => {
         map[question.id] = question;
       });
-
       setQuestionsMap(map);
+    }
+  }
+
+  async function loadSingleQuestion(questionId: string) {
+    const { data } = await supabase
+      .from("public_questions")
+      .select("*")
+      .eq("id", questionId)
+      .single();
+
+    if (data) {
+      setQuestionsMap((oldMap) => ({
+        ...oldMap,
+        [data.id]: data,
+      }));
     }
   }
 
@@ -165,12 +314,14 @@ export default function Home() {
   }
 
   async function checkExistingAnswer() {
-    if (!phone || !currentQuestion || !gameState?.updated_at) return;
+    const saved = getSavedPlayerData();
+
+    if (!saved.phone || !currentQuestion || !gameState?.updated_at) return;
 
     const { data } = await supabase
       .from("answers")
       .select("*")
-      .eq("phone", phone)
+      .eq("phone", saved.phone)
       .eq("question_id", currentQuestion.id)
       .gte("answered_at", gameState.updated_at)
       .limit(1);
@@ -188,6 +339,7 @@ export default function Home() {
     const phoneClean = phone.replace(/\s+/g, "");
     const emailClean = email.trim().toLowerCase();
     const nameClean = playerName.trim();
+    const sessionId = getOrCreateSessionId();
 
     const phoneRegex = /^07[0-9]{8}$/;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -209,29 +361,59 @@ export default function Home() {
 
     const ipResponse = await fetch("/api/client-ip");
     const ipData = await ipResponse.json();
-
     const userIp = ipData.ip || "necunoscut";
 
-    const { data: existingIp } = await supabase
+    const { data: existingPlayers } = await supabase
       .from("players")
       .select("*")
-      .eq("ip_address", userIp)
+      .or(`phone.eq.${phoneClean},email.eq.${emailClean}`)
       .limit(1);
 
-    if (existingIp && existingIp.length > 0) {
-      alert("Exista deja un cont creat de pe acest IP.");
-      return;
-    }
+    const existingPlayer = existingPlayers?.[0];
 
-    const { data: existingPhone } = await supabase
-      .from("players")
-      .select("*")
-      .eq("phone", phoneClean)
-      .limit(1);
+    if (existingPlayer) {
+      if (
+        existingPlayer.is_active &&
+        existingPlayer.session_id &&
+        existingPlayer.session_id !== sessionId
+      ) {
+        alert("Acest cont este deja activ pe alt dispozitiv.");
+        return;
+      }
 
-    if (existingPhone && existingPhone.length > 0) {
-      alert("Acest numar de telefon este deja folosit.");
-      return;
+      const { error } = await supabase
+        .from("players")
+        .update({
+          name: nameClean,
+          phone: phoneClean,
+          email: emailClean,
+          ip: userIp,
+          session_id: sessionId,
+          is_active: true,
+        })
+        .eq("id", existingPlayer.id);
+
+      if (error) {
+        alert("Eroare la activarea contului.");
+        return;
+      }
+    } else {
+      const { error } = await supabase.from("players").insert([
+        {
+          name: nameClean,
+          phone: phoneClean,
+          email: emailClean,
+          ip: userIp,
+          session_id: sessionId,
+          is_active: true,
+          score: 0,
+        },
+      ]);
+
+      if (error) {
+        alert("Eroare la crearea contului.");
+        return;
+      }
     }
 
     localStorage.setItem(
@@ -243,25 +425,21 @@ export default function Home() {
       })
     );
 
-    await supabase.from("players").insert([
-      {
-        name: nameClean,
-        phone: phoneClean,
-        email: emailClean,
-        ip_address: userIp,
-        score: 0,
-      },
-    ]);
+    if (gameState?.reset_key) {
+      localStorage.setItem("concurs_reset_key", gameState.reset_key);
+    }
 
     setPlayerName(nameClean);
     setPhone(phoneClean);
     setEmail(emailClean);
     setJoined(true);
 
-    loadPlayers();
+    await loadPlayers();
   }
 
   async function handleAnswer(answer: string) {
+    const saved = getSavedPlayerData();
+
     if (
       !currentQuestion ||
       !gameState?.is_running ||
@@ -272,14 +450,19 @@ export default function Home() {
       return;
     }
 
+    if (!saved.name || !saved.phone || !saved.email) {
+      logoutLocalPlayer();
+      return;
+    }
+
     setSelectedAnswer(answer);
     setAnswerSent(true);
 
     await supabase.from("answers").insert([
       {
-        player_name: playerName,
-        phone,
-        email,
+        player_name: saved.name,
+        phone: saved.phone,
+        email: saved.email,
         question_id: currentQuestion.id,
         answer,
         is_correct: false,
@@ -287,77 +470,30 @@ export default function Home() {
     ]);
   }
 
-  function formatCountdown(totalSeconds: number) {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-
-    if (hours > 0) {
-      return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
-        2,
-        "0"
-      )}:${String(seconds).padStart(2, "0")}`;
-    }
-
-    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(
-      2,
-      "0"
-    )}`;
-  }
-
   if (!joined) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-[#101b3b]/90 backdrop-blur-xl border border-blue-500/20 rounded-[35px] p-8 shadow-[0_0_80px_rgba(37,99,235,0.25)]">
-
-          <div className="flex justify-center mb-5">
-            <Image
-              src="/logo.jpg"
-              alt="logo"
-              width={180}
-              height={180}
-              className="rounded-2xl"
-            />
+        <div className="w-full max-w-sm bg-[#101b3b]/90 backdrop-blur-xl border border-blue-500/20 rounded-[28px] p-6 shadow-[0_0_70px_rgba(37,99,235,0.25)]">
+          <div className="flex justify-center mb-4">
+            <Image src="/logo.jpg" alt="logo" width={140} height={140} className="rounded-2xl" />
           </div>
 
-          <h1 className="text-white text-3xl font-black text-center leading-tight">
+          <h1 className="text-white text-2xl font-black text-center leading-tight">
             Concurs LIVE
           </h1>
 
-          <p className="text-blue-300 text-center mt-2 text-lg">
+          <p className="text-blue-300 text-center mt-2 text-base">
             Suruburi-Holsuruburi.RO
           </p>
 
-          <div className="mt-7 flex flex-col gap-4">
+          <div className="mt-6 flex flex-col gap-3">
+            <input className="bg-[#1b2952] border border-blue-400/20 text-white p-3 rounded-2xl text-base outline-none focus:border-blue-400" placeholder="Nume complet" value={playerName} onChange={(e) => setPlayerName(e.target.value)} />
+            <input className="bg-[#1b2952] border border-blue-400/20 text-white p-3 rounded-2xl text-base outline-none focus:border-blue-400" placeholder="Telefon" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            <input className="bg-[#1b2952] border border-blue-400/20 text-white p-3 rounded-2xl text-base outline-none focus:border-blue-400" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
 
-            <input
-              className="bg-[#1b2952] border border-blue-400/20 text-white p-4 rounded-2xl text-lg outline-none focus:border-blue-400"
-              placeholder="Nume complet"
-              value={playerName}
-              onChange={(e) => setPlayerName(e.target.value)}
-            />
-
-            <input
-              className="bg-[#1b2952] border border-blue-400/20 text-white p-4 rounded-2xl text-lg outline-none focus:border-blue-400"
-              placeholder="Telefon"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-
-            <input
-              className="bg-[#1b2952] border border-blue-400/20 text-white p-4 rounded-2xl text-lg outline-none focus:border-blue-400"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-
-            <button
-              onClick={joinGame}
-              className="bg-gradient-to-r from-blue-600 to-blue-500 hover:scale-[1.02] transition-all text-white p-4 rounded-2xl text-xl font-black shadow-lg shadow-blue-600/30"
-            >
+            <button onClick={joinGame} className="bg-gradient-to-r from-blue-600 to-blue-500 hover:scale-[1.02] transition-all text-white p-3 rounded-2xl text-lg font-black shadow-lg shadow-blue-600/30">
               INTRA IN JOC
             </button>
-
           </div>
         </div>
       </main>
@@ -366,39 +502,64 @@ export default function Home() {
 
   if (!gameState || Object.keys(questionsMap).length === 0) {
     return (
-      <main className="min-h-screen bg-[#020617] flex items-center justify-center text-white text-3xl font-bold">
+      <main className="min-h-screen bg-[#020617] flex items-center justify-center text-white text-2xl font-bold">
         Se incarca jocul...
       </main>
     );
   }
 
   if (gameState.winner_name) {
+    const finishedAt = gameState.finished_at
+      ? new Date(gameState.finished_at).getTime()
+      : Date.now();
+
+    const secondsSinceFinish = Math.floor((nowMs - finishedAt) / 1000);
+    const nextGameDate = getNextSundayAt20();
+    const secondsToNextGame = Math.max(
+      0,
+      Math.ceil((nextGameDate.getTime() - nowMs) / 1000)
+    );
+
     return (
       <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] flex items-center justify-center p-4 text-white">
-        <div className="bg-[#101b3b]/90 border border-green-400/30 shadow-[0_0_100px_rgba(34,197,94,0.35)] rounded-[40px] p-10 text-center max-w-3xl">
-
-          <div className="flex justify-center mb-6">
-            <Image
-              src="/logo.jpg"
-              alt="logo"
-              width={170}
-              height={170}
-              className="rounded-2xl"
-            />
+        <div className="bg-[#101b3b]/90 border border-green-400/30 shadow-[0_0_100px_rgba(34,197,94,0.35)] rounded-[35px] p-8 text-center max-w-2xl">
+          <div className="flex justify-center mb-5">
+            <Image src="/logo.jpg" alt="logo" width={130} height={130} className="rounded-2xl" />
           </div>
 
-          <h1 className="text-5xl font-black text-green-400 leading-tight">
-            {gameState.winner_name}
-          </h1>
+          {secondsSinceFinish < 60 ? (
+            <>
+              <h1 className="text-4xl font-black text-green-400 leading-tight">
+                Jocul s-a terminat
+              </h1>
 
-          <p className="text-3xl mt-5 font-bold text-white">
-            A castigat premiul de 100 LEI!
-          </p>
+              <p className="text-2xl mt-5 font-bold text-white leading-snug">
+                {gameState.winner_name} a raspuns primul corect la{" "}
+                {gameState.final_winner_score || 10} intrebari si a castigat 100 de lei.
+              </p>
 
-          <p className="text-xl mt-6 text-blue-200">
-            Urmatorul joc va incepe in curand.
-          </p>
+              <p className="text-xl mt-6 text-blue-200 leading-snug">
+                Urmatorul joc este programat sa inceapa Duminica viitoare{" "}
+                ({formatDateRo(nextGameDate)}) la ora 20:00.
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-4xl font-black text-blue-300 leading-tight">
+                Jocul porneste in:
+              </h1>
 
+              <div className="bg-[#020617] rounded-[30px] p-6 mt-6 mb-5 border border-green-400/20 shadow-[0_0_70px_rgba(34,197,94,0.2)]">
+                <p className="text-4xl font-black text-green-400 leading-relaxed">
+                  {formatCountdown(secondsToNextGame)}
+                </p>
+              </div>
+
+              <p className="text-xl text-blue-200">
+                Duminica viitoare ({formatDateRo(nextGameDate)}) la ora 20:00.
+              </p>
+            </>
+          )}
         </div>
       </main>
     );
@@ -413,188 +574,191 @@ export default function Home() {
   if (hasActiveLobby) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] flex items-center justify-center p-4 text-white">
-
-        <div className="bg-[#101b3b]/90 border border-blue-400/20 shadow-[0_0_80px_rgba(37,99,235,0.25)] rounded-[40px] p-10 text-center max-w-3xl">
-
-          <div className="flex justify-center mb-6">
-            <Image
-              src="/logo.jpg"
-              alt="logo"
-              width={170}
-              height={170}
-              className="rounded-2xl"
-            />
+        <div className="bg-[#101b3b]/90 border border-blue-400/20 shadow-[0_0_80px_rgba(37,99,235,0.25)] rounded-[35px] p-8 text-center max-w-2xl">
+          <div className="flex justify-center mb-5">
+            <Image src="/logo.jpg" alt="logo" width={130} height={130} className="rounded-2xl" />
           </div>
 
-          <h1 className="text-5xl font-black text-blue-300 mb-6">
+          <h1 className="text-4xl font-black text-blue-300 mb-5">
             Lobby LIVE
           </h1>
 
-          <p className="text-2xl mb-6">
-            Concursul incepe in:
-          </p>
+          <p className="text-xl mb-5">Concursul incepe in:</p>
 
-          <div className="bg-[#020617] rounded-[35px] p-8 mb-6 border border-green-400/20 shadow-[0_0_70px_rgba(34,197,94,0.2)]">
-            <p className="text-7xl font-black text-green-400">
+          <div className="bg-[#020617] rounded-[30px] p-6 mb-5 border border-green-400/20 shadow-[0_0_70px_rgba(34,197,94,0.2)]">
+            <p className="text-4xl font-black text-green-400 leading-relaxed">
               {formatCountdown(countdownToGame)}
             </p>
           </div>
 
-          <p className="text-xl text-blue-100">
+          <p className="text-lg text-blue-100">
             Ramai pe pagina. Jocul porneste automat.
           </p>
-
         </div>
+      </main>
+    );
+  }
 
+  if (!gameState.is_running && !gameState.game_start) {
+    const nextGameDate = getNextSundayAt20();
+    const secondsToNextGame = Math.max(
+      0,
+      Math.ceil((nextGameDate.getTime() - nowMs) / 1000)
+    );
+
+    return (
+      <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] flex items-center justify-center p-4 text-white">
+        <div className="bg-[#101b3b]/90 border border-blue-400/20 shadow-[0_0_80px_rgba(37,99,235,0.25)] rounded-[35px] p-8 text-center max-w-2xl">
+          <div className="flex justify-center mb-5">
+            <Image src="/logo.jpg" alt="logo" width={130} height={130} className="rounded-2xl" />
+          </div>
+
+          <h1 className="text-4xl font-black text-blue-300 leading-tight">
+            Concursul nu este pornit momentan
+          </h1>
+
+          <p className="text-xl mt-5 text-blue-100 leading-snug">
+            Urmatorul joc este programat Duminica viitoare{" "}
+            ({formatDateRo(nextGameDate)}) la ora 20:00.
+          </p>
+
+          <div className="bg-[#020617] rounded-[30px] p-6 mt-6 border border-green-400/20 shadow-[0_0_70px_rgba(34,197,94,0.2)]">
+            <p className="text-2xl font-black text-green-300 mb-3">
+              Jocul porneste in:
+            </p>
+
+            <p className="text-4xl font-black text-green-400 leading-relaxed">
+              {formatCountdown(secondsToNextGame)}
+            </p>
+          </div>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] text-white p-4 flex flex-col items-center overflow-hidden">
+    <main className="min-h-screen bg-gradient-to-br from-[#020617] via-[#07153a] to-[#020617] text-white px-4 py-2 flex flex-col items-center overflow-hidden">
+      <div className="flex flex-col items-center">
+        <Image src="/logo.jpg" alt="logo" width={78} height={78} className="rounded-xl shadow-[0_0_35px_rgba(37,99,235,0.35)]" />
 
-      <div className="flex flex-col items-center mt-2">
-        <Image
-          src="/logo.jpg"
-          alt="logo"
-          width={120}
-          height={120}
-          className="rounded-2xl shadow-[0_0_50px_rgba(37,99,235,0.35)]"
-        />
-
-        <h1 className="text-4xl md:text-5xl font-black text-center mt-4">
+        <h1 className="text-3xl md:text-4xl font-black text-center mt-2">
           Concurs LIVE
         </h1>
 
-        <p className="text-blue-300 text-lg mt-2 text-center">
+        <p className="text-blue-300 text-sm mt-1 text-center">
           Suruburi-Holsuruburi.RO
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mt-6 w-full max-w-7xl">
-
-        <section className="lg:col-span-2 bg-[#101b3b]/90 border border-blue-400/20 rounded-[35px] p-6 shadow-[0_0_70px_rgba(37,99,235,0.15)]">
-
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4 w-full max-w-6xl">
+        <section className="lg:col-span-2 bg-[#101b3b]/90 border border-blue-400/20 rounded-[28px] p-4 shadow-[0_0_55px_rgba(37,99,235,0.15)]">
           <div className="flex justify-between items-center gap-3 flex-wrap">
-
-            <div className="bg-[#1b2952] px-5 py-3 rounded-2xl">
-              <p className="text-sm text-blue-200">Jucator</p>
-              <p className="text-xl font-black">{playerName}</p>
+            <div className="bg-[#1b2952] px-4 py-2 rounded-2xl">
+              <p className="text-xs text-blue-200">Jucator</p>
+              <p className="text-lg font-black">{playerName}</p>
             </div>
 
-            <div className="bg-[#1b2952] px-5 py-3 rounded-2xl text-center">
-              <p className="text-sm text-blue-200">Intrebarea</p>
-              <p className="text-3xl font-black">
+            <div className="bg-[#1b2952] px-4 py-2 rounded-2xl text-center">
+              <p className="text-xs text-blue-200">Intrebarea</p>
+              <p className="text-2xl font-black">
                 {(gameState.current_question_index || 0) + 1}
               </p>
             </div>
 
-            <div className="bg-[#220f17] px-5 py-3 rounded-2xl text-center border border-red-400/20">
-              <p className="text-sm text-red-200">Timp ramas</p>
-              <p className="text-3xl font-black text-red-400">
+            <div className="bg-[#220f17] px-4 py-2 rounded-2xl text-center border border-red-400/20">
+              <p className="text-xs text-red-200">Timp ramas</p>
+              <p className="text-2xl font-black text-red-400">
                 {gameState.time_left}s
               </p>
             </div>
-
           </div>
 
-          <div className="bg-[#1b2952] border border-blue-400/10 rounded-[30px] p-7 mt-6 min-h-[150px] flex items-center justify-center">
-            <h2 className="text-2xl md:text-3xl text-center font-black leading-snug">
-              {currentQuestion?.question}
+          <div className="bg-[#1b2952] border border-blue-400/10 rounded-[24px] p-5 mt-4 min-h-[105px] flex items-center justify-center">
+            <h2 className="text-xl md:text-2xl text-center font-black leading-snug">
+              {currentQuestion?.question || "Se incarca intrebarea..."}
             </h2>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
             {[
               currentQuestion?.answer_1,
               currentQuestion?.answer_2,
               currentQuestion?.answer_3,
               currentQuestion?.answer_4,
-            ].map((answer) => (
+            ].map((answer, index) => (
               <button
-                key={answer}
+                key={`${answer || "raspuns"}-${index}`}
                 onClick={() => answer && handleAnswer(answer)}
-                disabled={answerSent || gameState.show_result}
-                className={`p-5 rounded-[24px] text-xl font-black transition-all min-h-[85px] border ${
+                disabled={!answer || answerSent || gameState.show_result}
+                className={`p-4 rounded-[20px] text-lg font-black transition-all min-h-[65px] border ${
                   selectedAnswer === answer
                     ? "bg-yellow-400 text-black border-yellow-200 scale-[1.02]"
-                    : answerSent || gameState.show_result
+                    : !answer || answerSent || gameState.show_result
                     ? "bg-gray-600 text-white border-gray-500"
                     : "bg-blue-600 hover:bg-blue-500 hover:scale-[1.02] border-blue-400/20"
                 }`}
               >
-                {answer}
+                {answer || ""}
               </button>
             ))}
-
           </div>
 
           {answerSent && !gameState.show_result && (
-            <div className="bg-[#02122e] border border-yellow-400/20 mt-5 p-5 rounded-[24px] text-center">
-              <p className="text-yellow-300 text-2xl font-black">
+            <div className="bg-[#02122e] border border-yellow-400/20 mt-4 p-4 rounded-[20px] text-center">
+              <p className="text-yellow-300 text-xl font-black">
                 Raspuns trimis!
               </p>
             </div>
           )}
 
           {gameState.show_result && (
-            <div className="bg-[#052e16] border border-green-400/20 mt-5 p-5 rounded-[24px] text-center">
-
-              <p className="text-green-300 text-2xl font-black">
+            <div className="bg-[#052e16] border border-green-400/20 mt-4 p-4 rounded-[20px] text-center">
+              <p className="text-green-300 text-xl font-black">
                 Raspuns corect:
               </p>
 
-              <p className="text-white text-3xl font-black mt-2">
+              <p className="text-white text-2xl font-black mt-1">
                 {gameState.last_correct_answer}
               </p>
 
-              <p className="text-green-200 text-xl font-bold mt-4">
+              <p className="text-green-200 text-lg font-bold mt-2">
                 {gameState.last_winner_name === "Nimeni"
                   ? "Nimeni nu a raspuns corect."
                   : `${gameState.last_winner_name} a raspuns primul corect.`}
               </p>
-
             </div>
           )}
-
         </section>
 
-        <aside className="bg-[#101b3b]/90 border border-blue-400/20 rounded-[35px] p-5 max-h-[78vh] overflow-auto shadow-[0_0_70px_rgba(37,99,235,0.15)]">
-
-          <h2 className="text-3xl font-black mb-5 text-center text-blue-300">
+        <aside className="bg-[#101b3b]/90 border border-blue-400/20 rounded-[28px] p-4 max-h-[70vh] overflow-auto shadow-[0_0_55px_rgba(37,99,235,0.15)]">
+          <h2 className="text-2xl font-black mb-4 text-center text-blue-300">
             Clasament LIVE
           </h2>
 
           <div className="flex flex-col gap-3">
+            {players
+              .filter((player) => player.is_active)
+              .map((player, index) => (
+                <div
+                  key={player.id}
+                  className={`rounded-[20px] p-3 flex justify-between items-center border ${
+                    index === 0
+                      ? "bg-gradient-to-r from-yellow-500 to-yellow-400 text-black border-yellow-200"
+                      : "bg-[#1b2952] border-blue-400/10"
+                  }`}
+                >
+                  <div className="text-sm font-black">
+                    #{index + 1} - {player.name}
+                  </div>
 
-            {players.map((player, index) => (
-              <div
-                key={player.id}
-                className={`rounded-[24px] p-4 flex justify-between items-center border ${
-                  index === 0
-                    ? "bg-gradient-to-r from-yellow-500 to-yellow-400 text-black border-yellow-200"
-                    : "bg-[#1b2952] border-blue-400/10"
-                }`}
-              >
-
-                <div className="text-base font-black">
-                  #{index + 1} - {player.name}
+                  <div className="text-sm font-black">
+                    {player.score} puncte
+                  </div>
                 </div>
-
-                <div className="text-base font-black">
-                  {player.score} puncte
-                </div>
-
-              </div>
-            ))}
-
+              ))}
           </div>
-
         </aside>
-
       </div>
-
     </main>
   );
 }

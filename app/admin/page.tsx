@@ -12,13 +12,10 @@ export default function AdminPage() {
   const [players, setPlayers] = useState<any[]>([]);
   const [winner, setWinner] = useState<any>(null);
   const [gameState, setGameState] = useState<any>(null);
-
   const [adminEmail, setAdminEmail] = useState(ADMIN_EMAIL);
   const [adminPassword, setAdminPassword] = useState("");
-
   const [authLoading, setAuthLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-
   const [secondsUntilStart, setSecondsUntilStart] = useState(60);
 
   useEffect(() => {
@@ -99,14 +96,14 @@ export default function AdminPage() {
 
   async function generateQuestionOrder() {
     const { data: questions } = await supabase
-      .from("questions")
+      .from("public_questions")
       .select("id");
 
     if (!questions || questions.length === 0) return [];
 
-    const shuffled = [...questions].sort(() => Math.random() - 0.5);
-
-    return shuffled.map((question) => question.id);
+    return [...questions]
+      .sort(() => Math.random() - 0.5)
+      .map((question) => question.id);
   }
 
   async function startLobby() {
@@ -118,12 +115,8 @@ export default function AdminPage() {
     }
 
     const safeSeconds = Math.max(10, Number(secondsUntilStart) || 60);
-
     const now = new Date();
-
-    const gameStart = new Date(
-      now.getTime() + safeSeconds * 1000
-    );
+    const gameStart = new Date(now.getTime() + safeSeconds * 1000);
 
     await supabase
       .from("game_state")
@@ -187,20 +180,18 @@ export default function AdminPage() {
   }
 
   async function resetGame() {
+    const resetKey = crypto.randomUUID();
+
+    await supabase.from("answers").delete().neq("id", "");
+
     await supabase
       .from("players")
-      .update({ score: 0 })
-      .gte("score", 0);
-
-    await supabase
-      .from("answers")
-      .delete()
-      .neq("id", "");
-
-    await supabase
-      .from("winners")
-      .delete()
-      .neq("id", "");
+      .update({
+        score: 0,
+        is_active: false,
+        session_id: null,
+      })
+      .not("id", "is", null);
 
     await supabase
       .from("game_state")
@@ -216,6 +207,7 @@ export default function AdminPage() {
         lobby_start: null,
         game_start: null,
         question_order: [],
+        reset_key: resetKey,
       })
       .eq("id", 1);
 
@@ -223,107 +215,20 @@ export default function AdminPage() {
   }
 
   if (authLoading) {
-    return (
-      <main
-        style={{
-          minHeight: "100vh",
-          background: "#050B2C",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          color: "white",
-          fontSize: "28px",
-        }}
-      >
-        Se verifica accesul admin...
-      </main>
-    );
+    return <main style={centerPageStyle}>Se verifica accesul admin...</main>;
   }
 
   if (!isAuthenticated) {
     return (
-      <main
-        style={{
-          minHeight: "100vh",
-          background: "#050B2C",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          padding: "20px",
-        }}
-      >
-        <div
-          style={{
-            background: "#18203A",
-            padding: "40px",
-            borderRadius: "20px",
-            width: "100%",
-            maxWidth: "420px",
-          }}
-        >
-          <h1
-            style={{
-              color: "white",
-              textAlign: "center",
-              fontSize: "38px",
-              marginBottom: "25px",
-              fontWeight: "bold",
-            }}
-          >
-            Admin Login
-          </h1>
+      <main style={loginPageStyle}>
+        <div style={loginBoxStyle}>
+          <h1 style={loginTitleStyle}>Admin Login</h1>
 
-          <input
-            type="email"
-            placeholder="Email admin"
-            value={adminEmail}
-            onChange={(e) => setAdminEmail(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "16px",
-              borderRadius: "12px",
-              border: "none",
-              fontSize: "18px",
-              marginBottom: "15px",
-              color: "#000000",
-              background: "#ffffff",
-            }}
-          />
+          <input type="email" placeholder="Email admin" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} style={inputStyle} />
 
-          <input
-            type="password"
-            placeholder="Parola"
-            value={adminPassword}
-            onChange={(e) => setAdminPassword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") loginAdmin();
-            }}
-            style={{
-              width: "100%",
-              padding: "16px",
-              borderRadius: "12px",
-              border: "none",
-              fontSize: "18px",
-              marginBottom: "20px",
-              color: "#000000",
-              background: "#ffffff",
-            }}
-          />
+          <input type="password" placeholder="Parola" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && loginAdmin()} style={{ ...inputStyle, marginBottom: "20px" }} />
 
-          <button
-            onClick={loginAdmin}
-            style={{
-              width: "100%",
-              padding: "16px",
-              borderRadius: "12px",
-              border: "none",
-              background: "#2563eb",
-              color: "white",
-              fontSize: "20px",
-              fontWeight: "bold",
-              cursor: "pointer",
-            }}
-          >
+          <button onClick={loginAdmin} style={loginButtonStyle}>
             LOGIN ADMIN
           </button>
         </div>
@@ -332,269 +237,63 @@ export default function AdminPage() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#050B2C",
-        color: "white",
-        padding: "30px",
-        fontFamily: "Arial",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "25px",
-          flexWrap: "wrap",
-          gap: "15px",
-        }}
-      >
-        <h1
-          style={{
-            fontSize: "42px",
-            fontWeight: "bold",
-          }}
-        >
-          Admin Panel
-        </h1>
-
-        <button
-          onClick={logoutAdmin}
-          style={{
-            padding: "12px 18px",
-            background: "#ef4444",
-            border: "none",
-            borderRadius: "10px",
-            color: "white",
-            fontWeight: "bold",
-            cursor: "pointer",
-            fontSize: "16px",
-          }}
-        >
-          Logout
-        </button>
+    <div style={pageStyle}>
+      <div style={topBarStyle}>
+        <h1 style={titleStyle}>Admin Panel</h1>
+        <button onClick={logoutAdmin} style={buttonStyle("#ef4444")}>Logout</button>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          gap: "15px",
-          marginBottom: "25px",
-          flexWrap: "wrap",
-          alignItems: "center",
-        }}
-      >
-        <label
-          style={{
-            fontSize: "18px",
-            fontWeight: "bold",
-          }}
-        >
-          Porneste in secunde:
-        </label>
+      <div style={controlsStyle}>
+        <label style={labelStyle}>Porneste in secunde:</label>
 
-        <input
-          type="number"
-          min="10"
-          value={secondsUntilStart}
-          onChange={(e) =>
-            setSecondsUntilStart(Number(e.target.value))
-          }
-          style={{
-            padding: "14px",
-            borderRadius: "10px",
-            border: "2px solid #ffffff",
-            width: "150px",
-            fontSize: "22px",
-            color: "#000000",
-            background: "#ffffff",
-            fontWeight: "bold",
-          }}
-        />
+        <input type="number" min="10" value={secondsUntilStart} onChange={(e) => setSecondsUntilStart(Number(e.target.value))} style={secondsInputStyle} />
 
-        <button
-          onClick={startLobby}
-          style={{
-            padding: "14px 22px",
-            background: "#22c55e",
-            border: "none",
-            borderRadius: "10px",
-            color: "white",
-            fontWeight: "bold",
-            cursor: "pointer",
-            fontSize: "17px",
-          }}
-        >
-          PORNESTE LOBBY
-        </button>
-
-        <button
-          onClick={startGameNow}
-          style={{
-            padding: "14px 22px",
-            background: "#3b82f6",
-            border: "none",
-            borderRadius: "10px",
-            color: "white",
-            fontWeight: "bold",
-            cursor: "pointer",
-            fontSize: "17px",
-          }}
-        >
-          START ACUM
-        </button>
-
-        <button
-          onClick={stopGame}
-          style={{
-            padding: "14px 22px",
-            background: "#ef4444",
-            border: "none",
-            borderRadius: "10px",
-            color: "white",
-            fontWeight: "bold",
-            cursor: "pointer",
-            fontSize: "17px",
-          }}
-        >
-          STOP JOC
-        </button>
-
-        <button
-          onClick={resetGame}
-          style={{
-            padding: "14px 22px",
-            background: "#f59e0b",
-            border: "none",
-            borderRadius: "10px",
-            color: "white",
-            fontWeight: "bold",
-            cursor: "pointer",
-            fontSize: "17px",
-          }}
-        >
-          RESET TOTAL
-        </button>
+        <button onClick={startLobby} style={buttonStyle("#22c55e")}>PORNESTE LOBBY</button>
+        <button onClick={startGameNow} style={buttonStyle("#3b82f6")}>START ACUM</button>
+        <button onClick={stopGame} style={buttonStyle("#ef4444")}>STOP JOC</button>
+        <button onClick={resetGame} style={buttonStyle("#f59e0b")}>RESET TOTAL</button>
       </div>
 
-      <div
-        style={{
-          background: "#18203A",
-          padding: "22px",
-          borderRadius: "18px",
-          marginBottom: "25px",
-        }}
-      >
+      <div style={cardStyle}>
         <h2>Status joc</h2>
-
-        <p>
-          Ruleaza:{" "}
-          <b>{gameState?.is_running ? "DA" : "NU"}</b>
-        </p>
-
-        <p>
-          Intrebarea:{" "}
-          <b>
-            {(gameState?.current_question_index || 0) + 1}
-          </b>
-        </p>
-
-        <p>
-          Timp ramas:{" "}
-          <b>{gameState?.time_left || 0}s</b>
-        </p>
-
-        <p>
-          Lobby start:{" "}
-          <b>{gameState?.lobby_start || "-"}</b>
-        </p>
-
-        <p>
-          Game start:{" "}
-          <b>{gameState?.game_start || "-"}</b>
-        </p>
+        <p>Ruleaza: <b>{gameState?.is_running ? "DA" : "NU"}</b></p>
+        <p>Intrebarea: <b>{(gameState?.current_question_index || 0) + 1}</b></p>
+        <p>Timp ramas: <b>{gameState?.time_left || 0}s</b></p>
+        <p>Lobby start: <b>{gameState?.lobby_start || "-"}</b></p>
+        <p>Game start: <b>{gameState?.game_start || "-"}</b></p>
+        <p>Reset key: <b>{gameState?.reset_key || "-"}</b></p>
       </div>
 
       {winner && (
-        <div
-          style={{
-            background: "#14532d",
-            padding: "22px",
-            borderRadius: "18px",
-            marginBottom: "25px",
-          }}
-        >
-          <h2>Castigator</h2>
-
-          <p
-            style={{
-              fontSize: "24px",
-              fontWeight: "bold",
-            }}
-          >
-            {winner.player_name}
-          </p>
-
+        <div style={winnerBoxStyle}>
+          <h2>Ultimul castigator salvat</h2>
+          <p style={winnerNameStyle}>{winner.player_name}</p>
           <p>Premiu: {winner.prize}</p>
         </div>
       )}
 
-      <div
-        style={{
-          background: "#18203A",
-          padding: "22px",
-          borderRadius: "18px",
-        }}
-      >
+      <div style={cardStyle}>
         <h2>Clasament LIVE</h2>
 
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            marginTop: "15px",
-          }}
-        >
+        <table style={tableStyle}>
           <thead>
             <tr>
-              <th style={{ textAlign: "left", padding: "10px" }}>
-                Nume
-              </th>
-
-              <th style={{ textAlign: "left", padding: "10px" }}>
-                Telefon
-              </th>
-
-              <th style={{ textAlign: "left", padding: "10px" }}>
-                Email
-              </th>
-
-              <th style={{ textAlign: "left", padding: "10px" }}>
-                Scor
-              </th>
+              <th style={thStyle}>Nume</th>
+              <th style={thStyle}>Telefon</th>
+              <th style={thStyle}>Email</th>
+              <th style={thStyle}>Activ</th>
+              <th style={thStyle}>Scor</th>
             </tr>
           </thead>
 
           <tbody>
             {players.map((player) => (
               <tr key={player.id}>
-                <td style={{ padding: "10px" }}>
-                  {player.name}
-                </td>
-
-                <td style={{ padding: "10px" }}>
-                  {player.phone}
-                </td>
-
-                <td style={{ padding: "10px" }}>
-                  {player.email}
-                </td>
-
-                <td style={{ padding: "10px" }}>
-                  {player.score}
-                </td>
+                <td style={tdStyle}>{player.name}</td>
+                <td style={tdStyle}>{player.phone}</td>
+                <td style={tdStyle}>{player.email}</td>
+                <td style={tdStyle}>{player.is_active ? "DA" : "NU"}</td>
+                <td style={tdStyle}>{player.score}</td>
               </tr>
             ))}
           </tbody>
@@ -602,6 +301,157 @@ export default function AdminPage() {
       </div>
     </div>
   );
+}
+
+const centerPageStyle: React.CSSProperties = {
+  minHeight: "100vh",
+  background: "#050B2C",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  color: "white",
+  fontSize: "28px",
+};
+
+const loginPageStyle: React.CSSProperties = {
+  minHeight: "100vh",
+  background: "#050B2C",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  padding: "20px",
+};
+
+const loginBoxStyle: React.CSSProperties = {
+  background: "#18203A",
+  padding: "40px",
+  borderRadius: "20px",
+  width: "100%",
+  maxWidth: "420px",
+};
+
+const loginTitleStyle: React.CSSProperties = {
+  color: "white",
+  textAlign: "center",
+  fontSize: "38px",
+  marginBottom: "25px",
+  fontWeight: "bold",
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "16px",
+  borderRadius: "12px",
+  border: "none",
+  fontSize: "18px",
+  marginBottom: "15px",
+  color: "#000000",
+  background: "#ffffff",
+};
+
+const loginButtonStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "16px",
+  borderRadius: "12px",
+  border: "none",
+  background: "#2563eb",
+  color: "white",
+  fontSize: "20px",
+  fontWeight: "bold",
+  cursor: "pointer",
+};
+
+const pageStyle: React.CSSProperties = {
+  minHeight: "100vh",
+  background: "#050B2C",
+  color: "white",
+  padding: "30px",
+  fontFamily: "Arial",
+};
+
+const topBarStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  marginBottom: "25px",
+  flexWrap: "wrap",
+  gap: "15px",
+};
+
+const titleStyle: React.CSSProperties = {
+  fontSize: "42px",
+  fontWeight: "bold",
+};
+
+const controlsStyle: React.CSSProperties = {
+  display: "flex",
+  gap: "15px",
+  marginBottom: "25px",
+  flexWrap: "wrap",
+  alignItems: "center",
+};
+
+const labelStyle: React.CSSProperties = {
+  fontSize: "18px",
+  fontWeight: "bold",
+};
+
+const secondsInputStyle: React.CSSProperties = {
+  padding: "14px",
+  borderRadius: "10px",
+  border: "2px solid #ffffff",
+  width: "150px",
+  fontSize: "22px",
+  color: "#000000",
+  background: "#ffffff",
+  fontWeight: "bold",
+};
+
+const cardStyle: React.CSSProperties = {
+  background: "#18203A",
+  padding: "22px",
+  borderRadius: "18px",
+  marginBottom: "25px",
+};
+
+const winnerBoxStyle: React.CSSProperties = {
+  background: "#14532d",
+  padding: "22px",
+  borderRadius: "18px",
+  marginBottom: "25px",
+};
+
+const winnerNameStyle: React.CSSProperties = {
+  fontSize: "24px",
+  fontWeight: "bold",
+};
+
+const tableStyle: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  marginTop: "15px",
+};
+
+const thStyle: React.CSSProperties = {
+  textAlign: "left",
+  padding: "10px",
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: "10px",
+};
+
+function buttonStyle(background: string): React.CSSProperties {
+  return {
+    padding: "14px 22px",
+    background,
+    border: "none",
+    borderRadius: "10px",
+    color: "white",
+    fontWeight: "bold",
+    cursor: "pointer",
+    fontSize: "17px",
+  };
 }
 
 /* AICI SE TERMINA CODUL - app/admin/page.tsx */
